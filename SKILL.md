@@ -87,7 +87,7 @@ Ask the user (or infer from context) these things before writing any code:
 3. **File format**: What format is the input data?
    - Already in a supported format (`.nii.gz`, `.mha`, `.nrrd`, `.png`, `.bmp`, `.tif`) → **keep it, no conversion needed**
    - Lossy format (`.jpg`, `.jpeg`) → must convert to `.png`
-   - Multi-frame TIFF → may need conversion to `.nii.gz` or individual frames
+   - Multi-frame TIFF (3D stacks) → keep as `.tif`, use Tiff3DIO with companion `.json` for spacing
    - Unsupported format → convert to nearest supported format
    - `file_ending` must be **consistent** across the dataset. If mixing formats, pick one and convert.
 
@@ -230,13 +230,17 @@ dataset.json for grayscale:
 
 ## 3D TIFF Datasets
 
-For 3D TIFF stacks (e.g., microscopy), nnUNet uses `Tiff3DIO`. Each `.tif` file must have a companion `.json` file with spacing information:
+For 3D TIFF stacks (e.g., microscopy, OCT), nnUNet uses `Tiff3DIO`. This includes **multi-frame TIFFs** (e.g., ImageJ stacks) — they are 3D volumes and Tiff3DIO handles them natively. Do NOT convert multi-frame TIFFs to `.nii.gz`.
+
+Each `.tif` file must have a companion `.json` file (same name, without channel suffix) with spacing information:
 
 ```json
 {
     "spacing": [7.6, 7.6, 80.0]
 }
 ```
+
+If the data has no real-world spacing (e.g., OCT), use `[1.0, 1.0, 1.0]` as placeholder.
 
 Folder structure:
 ```
@@ -249,6 +253,8 @@ Dataset123_Foo/
     ├── cell6.tif
     └── cell6.json          # spacing info for cell6
 ```
+
+Set `"overwrite_image_reader_writer": "Tiff3DIO"` in dataset.json to ensure nnUNet uses the correct reader.
 
 ---
 
