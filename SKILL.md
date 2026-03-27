@@ -256,6 +256,39 @@ Dataset123_Foo/
 
 Set `"overwrite_image_reader_writer": "Tiff3DIO"` in dataset.json to ensure nnUNet uses the correct reader.
 
+### How to handle 3D TIFF datasets
+```python
+import shutil
+import json
+import tifffile
+import numpy as np
+
+spacing = [1.0, 1.0, 1.0]  # replace with real spacing if known
+
+# Images: copy .tif as-is, add companion .json
+shutil.copy2("input/OCT001.tif", "imagesTr/OCT001_0000.tif")
+with open("imagesTr/OCT001.json", "w") as f:
+    json.dump({"spacing": spacing}, f)
+
+# Masks: remap values if needed, write as .tif, add companion .json
+mask = tifffile.imread("input/OCT001_mask.tif").astype(np.uint8)
+mask[mask == 255] = 1  # remap to consecutive labels
+tifffile.imwrite("labelsTr/OCT001.tif", mask)
+with open("labelsTr/OCT001.json", "w") as f:
+    json.dump({"spacing": spacing}, f)
+```
+
+### dataset.json for 3D TIFF
+```json
+{
+  "channel_names": {"0": "OCT"},
+  "labels": {"background": 0, "lesion": 1},
+  "numTraining": 100,
+  "file_ending": ".tif",
+  "overwrite_image_reader_writer": "Tiff3DIO"
+}
+```
+
 ---
 
 ## Classification Labels (cls_data.csv + dataset.json)
