@@ -32,18 +32,29 @@ Maps label name → integer value. **name:int** (NOT int:name like nnUNet v1).
 ```
 Rules:
 - `background` must map to `0`
+- If there is no background, do not use label 0 for something else
 - Values must be consecutive integers: 0, 1, 2, 3, ...
 - No gaps allowed
+- Not all labels need to be present in every training case
 
 ### `numTraining` (int, required)
 Number of training cases (i.e., number of entries in `imagesTr` / number of unique case IDs, NOT number of files).
 
 ### `file_ending` (string, required)
-File extension used for ALL images and segmentations.
-- `.nii.gz` — recommended, widely supported
-- `.nii` — uncompressed NIfTI
-- `.mha` — MetaImage format
-- Must be identical for images and labels
+File extension used for ALL images and segmentations. Must be identical for images and labels.
+
+Supported values (match the input data format — avoid unnecessary conversion):
+- `.nii.gz` — NIfTI compressed (3D volumetric data: CT, MRI)
+- `.nii` — NIfTI uncompressed
+- `.mha` — MetaImage (natively supported, no need to convert to .nii.gz)
+- `.nrrd` — Nearly Raw Raster Data (natively supported)
+- `.png` — 2D natural images (endoscopy, dermoscopy, histology, surgical). RGB stored in single file.
+- `.bmp` — 2D bitmap images
+- `.tif` / `.tiff` — 2D images or 3D stacks (3D requires companion .json with spacing)
+
+**IMPORTANT**: nnUNet requires **lossless** compression only. No `.jpg`/`.jpeg`!
+
+**Principle**: Use the format your data is already in. Do not convert unless necessary.
 
 ---
 
@@ -65,10 +76,13 @@ Citation or URL for the dataset. Not used by nnUNet.
 Data license. Not used by nnUNet.
 
 ### `overwrite_image_reader_writer` (string)
-Force a specific IO backend. Usually not needed — nnUNet auto-detects.
-- `"SimpleITKIO"` — use for `.mha`, `.nrrd`, or when nibabel fails
-- `"NibabelIO"` — use for NIfTI when SimpleITK causes issues
-- `"NibabelIOWithReorient"` — like NibabelIO but also reorients to RAS
+Force a specific IO backend. **Optional** — nnUNet auto-detects the correct reader based on file extension.
+Only set this if auto-detection fails or you need a specific behavior:
+- `"SimpleITKIO"` — alternative reader for `.nii.gz`, `.nrrd`, `.mha`
+- `"NibabelIO"` — NIfTI reader via nibabel
+- `"NibabelIOWithReorient"` — like NibabelIO but reorients images to RAS
+- `"NaturalImage2DIO"` — for `.png`, `.bmp`, `.tif` 2D images
+- `"Tiff3DIO"` — for 3D TIFF stacks (requires companion `.json` with spacing)
 
 ### `classification_labels` (dict)
 Case-level classification labels. Maps a task name → {class_int: class_name}.
@@ -99,7 +113,7 @@ Only needed if using hierarchical/overlapping labels. Leave out for standard seg
 
 ---
 
-## Full Example — Single-Modality CT
+## Full Example — Single-Modality CT (.nii.gz)
 ```json
 {
   "name": "Dataset042_LiverSeg",
@@ -119,7 +133,7 @@ Only needed if using hierarchical/overlapping labels. Leave out for standard seg
 }
 ```
 
-## Full Example — Multi-Modal MRI
+## Full Example — Multi-Modal MRI (.nii.gz)
 ```json
 {
   "name": "Dataset043_BrainTumour",
@@ -137,12 +151,32 @@ Only needed if using hierarchical/overlapping labels. Leave out for standard seg
     "edema": 3
   },
   "numTraining": 484,
-  "file_ending": ".nii.gz",
-  "overwrite_image_reader_writer": "SimpleITKIO"
+  "file_ending": ".nii.gz"
 }
 ```
 
-## Full Example — MHA Input
+## Full Example — 2D RGB PNG (Endoscopy/Surgical)
+```json
+{
+  "name": "Dataset060_EndoSeg",
+  "description": "2D endoscopy instrument segmentation",
+  "channel_names": {
+    "0": "R",
+    "1": "G",
+    "2": "B"
+  },
+  "labels": {
+    "background": 0,
+    "instrument": 1,
+    "tissue": 2
+  },
+  "numTraining": 1200,
+  "file_ending": ".png"
+}
+```
+Note: Despite 3 channel names, each image is stored as a single RGB `.png` with `_0000` suffix.
+
+## Full Example — MHA (kept as-is, no conversion)
 ```json
 {
   "name": "Dataset050_Prostate",
@@ -154,7 +188,24 @@ Only needed if using hierarchical/overlapping labels. Leave out for standard seg
     "prostate": 1
   },
   "numTraining": 32,
-  "file_ending": ".mha",
-  "overwrite_image_reader_writer": "SimpleITKIO"
+  "file_ending": ".mha"
 }
 ```
+
+## Full Example — 3D TIFF with spacing
+```json
+{
+  "name": "Dataset123_CellSeg",
+  "channel_names": {
+    "0": "Fluorescence"
+  },
+  "labels": {
+    "background": 0,
+    "cell": 1
+  },
+  "numTraining": 50,
+  "file_ending": ".tif",
+  "overwrite_image_reader_writer": "Tiff3DIO"
+}
+```
+Each `.tif` file needs a companion `.json` with spacing: `{"spacing": [0.5, 0.5, 2.0]}`

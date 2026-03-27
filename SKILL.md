@@ -1,21 +1,48 @@
 ---
 name: nnunet-converter
 description: >
-  Convert medical imaging datasets (NIfTI .nii/.nii.gz, .mha) into nnUNet v2 format.
+  Convert medical imaging datasets into nnUNet v2 format. Supports all nnUNet-native
+  formats: NIfTI (.nii.gz), MHA (.mha), NRRD (.nrrd), PNG (.png), BMP (.bmp), TIFF (.tif).
   Use this skill whenever the user mentions nnUNet, nnU-Net, dataset conversion for
   segmentation training, preparing data for nnUNet, organizing imagesTr/labelsTr folders,
   generating dataset.json, or structuring medical images for nnUNet preprocessing.
   Trigger even if the user just says "convert my dataset to nnUNet" or "prepare my
-  segmentation data for nnUNet training". Covers single-modality MRI, multi-modal MRI,
-  and CT datasets. Also handles classification labels (cls_data.csv) and
-  classification_labels in dataset.json.
+  segmentation data for nnUNet training". Also handles classification labels (cls_data.csv)
+  and classification_labels in dataset.json.
 ---
 
 # nnUNet v2 Dataset Converter Skill
 
-Convert NIfTI (.nii, .nii.gz) and MetaImage (.mha) datasets into nnUNet v2 format,
-including folder structure creation, file renaming, automatic dataset.json generation,
-and classification label support (cls_data.csv + classification_labels in dataset.json).
+Convert datasets into nnUNet v2 format with minimal unnecessary conversion.
+nnUNet v2 natively supports many file formats — **avoid format conversion whenever possible**.
+
+## Core Principle: Minimize Conversion
+
+nnUNet v2 supports multiple file formats natively via its ReaderWriter abstraction.
+**Do NOT convert files to a different format unless strictly necessary.** Specifically:
+- If data is already `.nii.gz` → keep as `.nii.gz`
+- If data is already `.mha` → keep as `.mha` (do NOT convert to `.nii.gz`)
+- If data is already `.nrrd` → keep as `.nrrd`
+- If data is 2D `.png` or `.bmp` → keep as `.png` (do NOT wrap in NIfTI)
+- If data is `.tif`/`.tiff` → keep as `.tif`
+- If data is `.jpg`/`.jpeg` → convert to `.png` (JPEG is lossy, nnUNet requires lossless)
+
+The only valid reasons to convert format are:
+1. Input uses lossy compression (`.jpg`) — convert to `.png`
+2. Mixing formats within a dataset (nnUNet requires one `file_ending` per dataset)
+3. Input format is not supported by any nnUNet ReaderWriter
+
+## Supported File Formats (from official nnUNet docs)
+
+| ReaderWriter | Extensions | Notes |
+|---|---|---|
+| **NaturalImage2DIO** | `.png`, `.bmp`, `.tif` | 2D natural images. RGB stored in single file (no channel split needed) |
+| **NibabelIO** | `.nii.gz`, `.nrrd`, `.mha` | Standard 3D medical imaging |
+| **NibabelIOWithReorient** | `.nii.gz`, `.nrrd`, `.mha` | Same as NibabelIO but reorients to RAS |
+| **SimpleITKIO** | `.nii.gz`, `.nrrd`, `.mha` | Alternative 3D reader |
+| **Tiff3DIO** | `.tif`, `.tiff` | 3D TIFF stacks. Requires companion `.json` with spacing info |
+
+**IMPORTANT**: nnUNet requires **lossless** (or no) compression. No `.jpg`!
 
 ## nnUNet v2 Format at a Glance
 
@@ -34,11 +61,12 @@ nnUNet_raw/
         └── ...
 ```
 
-**File naming rule:** `{CASE_ID}_{CHANNEL:04d}.{ext}` for images, `{CASE_ID}.{ext}` for labels.
+**File naming rule:** `{CASE_ID}_{XXXX}.{FILE_ENDING}` for images, `{CASE_ID}.{FILE_ENDING}` for labels.
 - CASE_ID: any string, e.g. `liver_001`, `BRATS_042`
-- CHANNEL: 4-digit zero-padded integer (`_0000`, `_0001`, ...)
+- XXXX: 4-digit zero-padded channel identifier (`_0000`, `_0001`, ...)
 - Single modality: only `_0000` exists
 - Labels: **no** channel suffix
+- **RGB exception**: For `.png` RGB natural images, all 3 color channels are stored in a single file with suffix `_0000` (nnUNet's `NaturalImage2DIO` reads the 3 channels automatically). Do NOT split RGB into separate files.
 
 ## Workflow
 
@@ -54,10 +82,16 @@ Ask the user (or infer from context) these things before writing any code:
 2. **Modalities / channels**: How many input channels?
    - Single (CT, T1 MRI, etc.) → one file per case, suffix `_0000`
    - Multi-modal (T1+T2+FLAIR+T1Gd) → one file per channel per case
+   - RGB natural images (endoscopy, dermoscopy, etc.) → **single** `.png` file with suffix `_0000`
 
-3. **File extension**: `.nii`, `.nii.gz`, or `.mha`? Must be **consistent** across the dataset (nnUNet requires one `file_ending` for the whole dataset). If mixing .nii and .nii.gz, convert all to .nii.gz.
+3. **File format**: What format is the input data?
+   - Already in a supported format (`.nii.gz`, `.mha`, `.nrrd`, `.png`, `.bmp`, `.tif`) → **keep it, no conversion needed**
+   - Lossy format (`.jpg`, `.jpeg`) → must convert to `.png`
+   - Multi-frame TIFF → may need conversion to `.nii.gz` or individual frames
+   - Unsupported format → convert to nearest supported format
+   - `file_ending` must be **consistent** across the dataset. If mixing formats, pick one and convert.
 
-4. **Label values**: What integer values appear in the masks? Must be **consecutive** starting from 0. 0 = background always. Ask the user what each label value represents (e.g. 1=liver, 2=tumor).
+4. **Label values**: What integer values appear in the masks? Must be **consecutive** starting from 0. 0 = background always (if no background, do not use 0 for something else). Ask the user what each label value represents (e.g. 1=liver, 2=tumor).
 
 5. **Train/test split**: Does the user have a pre-defined split, or should the script put everything in `imagesTr`?
 
@@ -77,15 +111,23 @@ Ask the user (or infer from context) these things before writing any code:
 
 ### Step 2 — Write the Conversion Script
 
-Write a Python script using **only standard library + SimpleITK** (for .mha support) and **nibabel** (for NIfTI).
+Write a Python script. Dependencies depend on the input format:
+- For `.nii.gz`/`.mha`/`.nrrd`: use `SimpleITK` or `nibabel`
+- For `.png`/`.jpg`/`.bmp`: use `PIL/Pillow`
+- For `.tif`/`.tiff`: use `PIL/Pillow` (2D) or `tifffile` (3D stacks)
+
 See `scripts/convert_template.py` for a reusable template.
 
 Key rules to enforce in the script:
+- **Avoid format conversion** — if input is already in a supported format, just copy/rename
 - Output file extension must match `file_ending` in dataset.json
-- All images **must** be the same extension (.nii.gz preferred for outputs)
+- All images **must** use the same `file_ending` across the dataset
+- For 2D RGB images (`.png`): store as a single RGB file per case with `_0000` suffix. Do NOT split channels.
+- For grayscale 2D: store as single-channel `.png` with `_0000` suffix
 - Labels must not have a channel suffix
 - Case identifiers must be consistent between imagesTr and labelsTr
 - Validate that label values are consecutive integers starting at 0
+- For `.jpg`/`.jpeg` inputs: convert to `.png` (lossless) since nnUNet forbids lossy formats
 
 ### Step 3 — Generate dataset.json
 
@@ -113,7 +155,7 @@ Optional but recommended:
 }
 ```
 
-> **Note on `overwrite_image_reader_writer`**: Add `"SimpleITKIO"` when using `.mha` files, since SimpleITK handles .mha natively. For `.nii.gz` it's optional.
+> **Note on `overwrite_image_reader_writer`**: This is **optional** — nnUNet auto-detects the correct ReaderWriter based on file extension. Only set it if auto-detection fails or you need a specific reader (e.g., `NibabelIOWithReorient` to force RAS reorientation).
 
 ### Step 4 — Validate
 
@@ -129,6 +171,80 @@ ls labelsTr/ | head -5
 
 # If nnUNet is installed, run integrity check:
 nnUNetv2_plan_and_preprocess -d {ID} --verify_dataset_integrity
+```
+
+---
+
+## 2D Image Datasets (PNG/BMP/TIFF)
+
+nnUNet v2 natively supports 2D images via `NaturalImage2DIO`. **Do NOT wrap 2D images in NIfTI containers.**
+
+### RGB natural images (endoscopy, dermoscopy, surgical, etc.)
+RGB images are stored as a **single** `.png` file per case. nnUNet reads the 3 channels automatically.
+```python
+from PIL import Image
+
+# RGB: save as single PNG — do NOT split into 3 separate channel files
+img = Image.open("input.jpg").convert("RGB")
+img.save("imagesTr/case_001_0000.png")  # single file, _0000 suffix
+
+# Mask: save as single-channel PNG with integer label values
+mask = Image.open("mask.png")
+mask.save("labelsTr/case_001.png")  # no channel suffix
+```
+
+dataset.json for RGB:
+```json
+{
+  "channel_names": {"0": "R", "1": "G", "2": "B"},
+  "labels": {"background": 0, "tumor": 1},
+  "numTraining": 500,
+  "file_ending": ".png"
+}
+```
+
+Note: Even though `channel_names` lists 3 channels, the image is stored as a single RGB `.png` file with only the `_0000` suffix. This is the sole exception to the one-file-per-channel rule.
+
+### Grayscale 2D images (ultrasound, X-ray, etc.)
+```python
+from PIL import Image
+
+img = Image.open("input.png").convert("L")
+img.save("imagesTr/case_001_0000.png")
+```
+
+dataset.json for grayscale:
+```json
+{
+  "channel_names": {"0": "Ultrasound"},
+  "labels": {"background": 0, "lesion": 1},
+  "numTraining": 200,
+  "file_ending": ".png"
+}
+```
+
+---
+
+## 3D TIFF Datasets
+
+For 3D TIFF stacks (e.g., microscopy), nnUNet uses `Tiff3DIO`. Each `.tif` file must have a companion `.json` file with spacing information:
+
+```json
+{
+    "spacing": [7.6, 7.6, 80.0]
+}
+```
+
+Folder structure:
+```
+Dataset123_Foo/
+├── dataset.json
+├── imagesTr/
+│   ├── cell6_0000.tif
+│   └── cell6.json         # spacing info for cell6
+└── labelsTr/
+    ├── cell6.tif
+    └── cell6.json          # spacing info for cell6
 ```
 
 ---
@@ -223,9 +339,9 @@ def resample_to_reference(moving_img, reference_img, interpolator=sitk.sitkLinea
 - **Labels/masks**: `sitk.sitkNearestNeighbor` (preserves integer label values)
 
 ### Example: PICAI dataset
-- T2W: 384×384×19 @ 0.5mm spacing (high-res reference)
-- ADC: 84×128×19 @ 2.0mm spacing → resample to T2W space
-- HBV: 84×128×19 @ 2.0mm spacing → resample to T2W space
+- T2W: 384x384x19 @ 0.5mm spacing (high-res reference)
+- ADC: 84x128x19 @ 2.0mm spacing → resample to T2W space
+- HBV: 84x128x19 @ 2.0mm spacing → resample to T2W space
 - Labels: already at T2W resolution
 
 ---
@@ -268,6 +384,22 @@ input/
 ```
 → Use regex/glob patterns to separate images from labels by suffix.
 
+### Layout D: 2D images with class folders
+```
+input/
+├── train/
+│   ├── ClassA/
+│   │   ├── img001.png
+│   │   └── img002.png
+│   └── ClassB/
+│       ├── img003.png
+│       └── img004.png
+└── masks/
+    ├── img001.png
+    └── img002.png
+```
+→ Walk class folders for images; derive classification labels from folder names.
+
 ---
 
 ## Multi-Modal Handling
@@ -289,26 +421,13 @@ imagesTr/
 
 ---
 
-## .mha → .nii.gz Conversion
-
-If input is `.mha` but user prefers `.nii.gz` output (recommended for compatibility):
-```python
-import SimpleITK as sitk
-img = sitk.ReadImage("input.mha")
-sitk.WriteImage(img, "output.nii.gz")
-```
-SimpleITK preserves spacing, origin, and direction cosines across formats.
-
-If keeping `.mha` as output format, set `"file_ending": ".mha"` and optionally add `"overwrite_image_reader_writer": "SimpleITKIO"`.
-
----
-
 ## Label Validation
 
 nnUNet requires:
-- Label 0 = background (always)
+- Label 0 = background (always). If there is no background, do not use 0 for something else.
 - Consecutive integers: 0, 1, 2, 3, ...
 - No gaps (e.g. 0, 1, 4 is INVALID)
+- Not all labels need to be present in every training case
 
 Check and remap if needed:
 ```python

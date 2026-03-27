@@ -5,7 +5,14 @@ nnUNet v2 Dataset Conversion Template
 Adapt this script to your specific input layout.
 Run: python convert_to_nnunet.py
 
-Dependencies: pip install SimpleITK nibabel numpy
+Core principle: AVOID UNNECESSARY FORMAT CONVERSION.
+If your data is already in a supported format (.nii.gz, .mha, .nrrd, .png, .tif),
+just copy/rename — do not convert to a different format.
+
+Dependencies (install only what you need):
+  pip install numpy Pillow          # for 2D PNG/BMP/TIFF
+  pip install nibabel               # for NIfTI
+  pip install SimpleITK             # for .mha/.nrrd or spatial resampling
 """
 
 import os
@@ -29,6 +36,7 @@ DATASET_NAME = "MyDataset"             # CamelCase, no spaces
 # Channel definitions: channel_index -> (modality_name, glob_pattern_in_case_folder)
 # For single modality: just one entry with index 0
 # For multi-modal: add entries for each modality IN ORDER
+# For RGB .png: just one entry (nnUNet reads 3 channels from single RGB file)
 CHANNELS: Dict[int, Tuple[str, str]] = {
     0: ("CT", "image.nii.gz"),         # (nnunet_name, filename_pattern)
     # 1: ("T2", "t2.nii.gz"),          # uncomment for multi-modal
@@ -43,49 +51,67 @@ LABELS: Dict[str, int] = {
     "structure": 1,                    # rename to your actual structure
 }
 
-FILE_ENDING = ".nii.gz"               # output file extension: .nii.gz or .mha
+# Output file extension — USE THE SAME FORMAT AS YOUR INPUT when possible.
+# Supported: .nii.gz, .mha, .nrrd, .png, .bmp, .tif
+# IMPORTANT: .jpg is NOT supported (lossy). Convert .jpg inputs to .png.
+FILE_ENDING = ".nii.gz"
 
 # Train/test split — set TEST_RATIO = 0 to put everything in imagesTr
 TEST_RATIO = 0.0                       # e.g. 0.2 means 20% go to imagesTs
 RANDOM_SEED = 42
 
-# Optional: force SimpleITK reader (recommended for .mha inputs)
-USE_SIMPLEITK_IO = False
+# Optional: force a specific ReaderWriter (usually not needed — nnUNet auto-detects)
+# Options: "SimpleITKIO", "NibabelIO", "NibabelIOWithReorient", "NaturalImage2DIO", "Tiff3DIO"
+OVERWRITE_READER_WRITER = None
 
 # ============================================================
 # HELPERS
 # ============================================================
 
-def read_image(path: Path):
-    """Read NIfTI or MHA image. Returns (array, affine_or_None, sitk_image)."""
-    suffix = "".join(path.suffixes)
-    if suffix in (".mha", ".nrrd", ".nii", ".nii.gz"):
-        try:
-            import SimpleITK as sitk
-            sitk_img = sitk.ReadImage(str(path))
-            return sitk_img
-        except Exception as e:
-            raise RuntimeError(f"Could not read {path}: {e}")
-    raise ValueError(f"Unsupported format: {path}")
-
-
-def write_image(sitk_img, output_path: Path):
-    """Write SimpleITK image to output path."""
-    import SimpleITK as sitk
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    sitk.WriteImage(sitk_img, str(output_path))
+def copy_or_convert(src: Path, dst: Path):
+    """
+    Copy file if format matches FILE_ENDING, otherwise convert.
+    For 2D: handles jpg->png conversion.
+    For 3D: handles format conversion via SimpleITK.
+    """
+    src_ext = "".join(src.suffixes)
+    if src_ext == FILE_ENDING:
+        # Same format — just copy
+        shutil.copy2(src, dst)
+    elif src_ext in (".jpg", ".jpeg") and FILE_ENDING == ".png":
+        # Lossy -> lossless conversion
+        from PIL import Image
+        img = Image.open(str(src))
+        img.save(str(dst))
+        print(f"  Converted (lossy->lossless): {src.name} -> {dst.name}")
+    elif src_ext in (".png", ".bmp", ".tif", ".tiff") and FILE_ENDING in (".png", ".bmp", ".tif"):
+        # 2D format conversion
+        from PIL import Image
+        img = Image.open(str(src))
+        img.save(str(dst))
+        print(f"  Converted: {src.name} -> {dst.name}")
+    else:
+        # 3D format conversion via SimpleITK
+        import SimpleITK as sitk
+        img = sitk.ReadImage(str(src))
+        sitk.WriteImage(img, str(dst))
+        print(f"  Converted: {src.name} -> {dst.name}")
 
 
 def validate_labels(label_path: Path, expected_labels: Dict[str, int]) -> List[str]:
     """Check that label values are consecutive and match expectations. Returns warnings."""
-    import SimpleITK as sitk
-    import numpy as np
-
     warnings = []
-    img = sitk.ReadImage(str(label_path))
-    arr = sitk.GetArrayFromImage(img)
-    unique_vals = sorted(np.unique(arr).astype(int).tolist())
 
+    suffix = "".join(label_path.suffixes)
+    if suffix in (".png", ".bmp", ".tif", ".tiff"):
+        from PIL import Image
+        arr = np.array(Image.open(str(label_path)))
+    else:
+        import SimpleITK as sitk
+        img = sitk.ReadImage(str(label_path))
+        arr = sitk.GetArrayFromImage(img)
+
+    unique_vals = sorted(np.unique(arr).astype(int).tolist())
     expected_vals = sorted(expected_labels.values())
     if unique_vals != expected_vals:
         warnings.append(
@@ -107,19 +133,26 @@ def validate_labels(label_path: Path, expected_labels: Dict[str, int]) -> List[s
 
 def remap_labels(label_path: Path, mapping: Dict[int, int], output_path: Path):
     """Remap label integer values using a {old: new} mapping dict."""
-    import SimpleITK as sitk
-    import numpy as np
-
-    img = sitk.ReadImage(str(label_path))
-    arr = sitk.GetArrayFromImage(img).astype(np.int32)
-    remapped = np.zeros_like(arr)
-    for old_val, new_val in mapping.items():
-        remapped[arr == old_val] = new_val
-
-    out_img = sitk.GetImageFromArray(remapped)
-    out_img.CopyInformation(img)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    sitk.WriteImage(out_img, str(output_path))
+    suffix = "".join(label_path.suffixes)
+    if suffix in (".png", ".bmp", ".tif", ".tiff"):
+        from PIL import Image
+        arr = np.array(Image.open(str(label_path))).astype(np.int32)
+        remapped = np.zeros_like(arr, dtype=np.uint8)
+        for old_val, new_val in mapping.items():
+            remapped[arr == old_val] = new_val
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(remapped).save(str(output_path))
+    else:
+        import SimpleITK as sitk
+        img = sitk.ReadImage(str(label_path))
+        arr = sitk.GetArrayFromImage(img).astype(np.int32)
+        remapped = np.zeros_like(arr)
+        for old_val, new_val in mapping.items():
+            remapped[arr == old_val] = new_val
+        out_img = sitk.GetImageFromArray(remapped)
+        out_img.CopyInformation(img)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        sitk.WriteImage(out_img, str(output_path))
 
 
 # ============================================================
@@ -154,7 +187,6 @@ def get_cases() -> List[Path]:
 
 def main():
     import random
-    import SimpleITK as sitk  # noqa: imported here to give clear error if missing
 
     dataset_folder_name = f"Dataset{DATASET_ID:03d}_{DATASET_NAME}"
     dataset_root = OUTPUT_DIR / dataset_folder_name
@@ -197,13 +229,7 @@ def main():
             dst_dir = images_ts if is_test else images_tr
             dst = dst_dir / dst_name
 
-            if src.suffix == FILE_ENDING or "".join(src.suffixes) == FILE_ENDING:
-                shutil.copy2(src, dst)
-            else:
-                # Format conversion needed (e.g. .mha → .nii.gz)
-                img = sitk.ReadImage(str(src))
-                sitk.WriteImage(img, str(dst))
-                print(f"  Converted: {src.name} → {dst.name}")
+            copy_or_convert(src, dst)
 
         # --- Copy label (train only) ---
         if not is_test:
@@ -215,11 +241,7 @@ def main():
                 warnings = validate_labels(label_src, LABELS)
                 all_warnings.extend(warnings)
 
-                if label_src.suffix == FILE_ENDING or "".join(label_src.suffixes) == FILE_ENDING:
-                    shutil.copy2(label_src, label_dst)
-                else:
-                    img = sitk.ReadImage(str(label_src))
-                    sitk.WriteImage(img, str(label_dst))
+                copy_or_convert(label_src, label_dst)
             else:
                 print(f"  WARNING: No label found for {case_id}")
             n_train += 1
@@ -235,8 +257,8 @@ def main():
         "numTraining": n_train,
         "file_ending": FILE_ENDING,
     }
-    if USE_SIMPLEITK_IO:
-        dataset_json["overwrite_image_reader_writer"] = "SimpleITKIO"
+    if OVERWRITE_READER_WRITER:
+        dataset_json["overwrite_image_reader_writer"] = OVERWRITE_READER_WRITER
 
     json_path = dataset_root / "dataset.json"
     with open(json_path, "w") as f:
@@ -244,10 +266,11 @@ def main():
 
     # --- Summary ---
     print("\n" + "=" * 60)
-    print(f"Conversion complete → {dataset_root}")
+    print(f"Conversion complete -> {dataset_root}")
     print(f"  Training cases : {n_train}")
     print(f"  Test cases     : {n_test}")
     print(f"  Channels       : {len(CHANNELS)}")
+    print(f"  File ending    : {FILE_ENDING}")
     print(f"  dataset.json   : {json_path}")
 
     if all_warnings:
