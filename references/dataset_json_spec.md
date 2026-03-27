@@ -17,9 +17,12 @@ Maps channel index string → modality name string.
   "3": "FLAIR"
 }
 ```
-**Critical**: The string value controls normalization:
-- `"CT"` → global foreground normalization (CT Hounsfield units)
-- Anything else → per-channel z-score normalization (appropriate for MRI)
+**Critical**: The string value controls normalization scheme:
+- `"CT"` → global foreground normalization (clip to 0.5/99.5 percentile, z-score on foreground intensities)
+- `"noNorm"` → no normalization at all
+- `"rescale_to_0_1"` → rescale intensities to [0, 1]
+- `"rgb_to_0_1"` → assumes uint8 input, divides by 255 (use for RGB natural images)
+- `"zscore"` or anything else → per-image z-score normalization (default for MRI)
 
 ### `labels` (dict, required)
 Maps label name → integer value. **name:int** (NOT int:name like nnUNet v1).
@@ -110,6 +113,31 @@ and `label` is the integer class. For multi-label tasks, use list format: `"[1, 
 
 ### `regions_class_order` (list, only for region-based training)
 Only needed if using hierarchical/overlapping labels. Leave out for standard segmentation.
+Tells nnUNet how to convert region predictions back to integer label maps.
+Order matters: encompassing regions first, substructures last (later entries overwrite earlier ones).
+Length must equal number of regions (excluding background).
+```json
+"labels": {
+    "background": 0,
+    "whole_tumor": [1, 2, 3],
+    "tumor_core": [2, 3],
+    "enhancing_tumor": 3
+},
+"regions_class_order": [1, 2, 3]
+```
+**IMPORTANT**: Use `sort_keys=False` in `json.dump()` to preserve label declaration order!
+
+### Ignore label
+For sparse/incomplete annotations. Must be the **highest** integer value and named `"ignore"`:
+```json
+"labels": {
+    "background": 0,
+    "organ": 1,
+    "tumor": 2,
+    "ignore": 3
+}
+```
+Ignored regions are excluded from loss computation. nnUNet still predicts dense segmentations at inference.
 
 ---
 

@@ -97,9 +97,12 @@ Ask the user (or infer from context) these things before writing any code:
 
 6. **Dataset ID and name**: nnUNet needs a 3-digit ID (e.g. 042) and a CamelCase name (e.g. LiverSeg). Ask if not obvious. IDs 001–010 are reserved for Medical Segmentation Decathlon.
 
-7. **Channel names**: What is each modality called? This affects nnUNet normalization:
-   - Use `"CT"` exactly for CT scans → triggers CT-specific global normalization
-   - Use `"MRI"`, `"T1"`, `"T2"`, `"FLAIR"`, `"ADC"`, etc. for MRI → triggers per-channel z-score normalization
+7. **Channel names**: What is each modality called? This controls nnUNet normalization:
+   - `"CT"` → CT-specific global normalization (clip to 0.5/99.5 percentile, then z-score on foreground)
+   - `"noNorm"` → no normalization at all
+   - `"rescale_to_0_1"` → rescale intensities to [0, 1]
+   - `"rgb_to_0_1"` → assumes uint8, divides by 255 (use for RGB natural images)
+   - `"zscore"` or anything else → per-image z-score normalization (default for MRI)
    - The exact string matters for normalization scheme selection!
 
 8. **Classification labels**: Does the dataset have case-level classification labels?
@@ -439,6 +442,133 @@ data = img.get_fdata().astype(int)
 unique_vals = sorted(np.unique(data))
 # Remap to consecutive if needed
 mapping = {old: new for new, old in enumerate(unique_vals)}
+```
+
+---
+
+## Ignore Label (Sparse Annotations)
+
+nnUNet supports an `ignore` label for datasets with incomplete annotations (scribbles, partial slices, coarse masks). Regions marked with the ignore label are excluded from loss computation during training, but nnUNet still predicts dense segmentations at inference.
+
+### Rules
+- The ignore label **must** be the highest integer value in the segmentation
+- It **must** be named `"ignore"` in dataset.json
+- It is NOT predicted — do not include it in `regions_class_order`
+
+### Example
+```json
+"labels": {
+    "background": 0,
+    "edema": 1,
+    "necrosis": 2,
+    "enhancing_tumor": 3,
+    "ignore": 4
+}
+```
+
+Use cases:
+- Scribble supervision (save annotation time)
+- Dense annotation of only a subset of slices
+- Masking out faulty regions in reference segmentations
+
+---
+
+## Region-Based Training (Overlapping/Hierarchical Labels)
+
+For tasks where evaluation targets are overlapping regions rather than individual labels (e.g., BraTS: whole tumor, tumor core, enhancing tumor), nnUNet supports region-based training.
+
+### How it works
+- Labels in dataset.json are declared as **lists of integers** representing which raw label values belong to that region
+- An additional `regions_class_order` field tells nnUNet how to convert regions back to an integer segmentation map
+- nnU-Net trains on regions and evaluates on regions
+
+### Example (BraTS-style)
+Standard label-based:
+```json
+"labels": {
+    "background": 0,
+    "edema": 1,
+    "non_enhancing_and_necrosis": 2,
+    "enhancing_tumor": 3
+}
+```
+
+Region-based equivalent:
+```json
+"labels": {
+    "background": 0,
+    "whole_tumor": [1, 2, 3],
+    "tumor_core": [2, 3],
+    "enhancing_tumor": 3
+},
+"regions_class_order": [1, 2, 3]
+```
+
+### Critical rules
+- `regions_class_order` length must equal the number of regions (excluding background)
+- Order matters: encompassing regions first, substructures later (later entries overwrite earlier ones)
+- **IMPORTANT**: When writing dataset.json, use `sort_keys=False` in `json.dump()` to preserve label declaration order!
+- Compatible with the ignore label (just don't include ignore in `regions_class_order`)
+
+---
+
+## Environment Variables
+
+nnUNet requires three environment variables to be set before running any commands:
+
+```bash
+export nnUNet_raw="/path/to/nnUNet_raw"
+export nnUNet_preprocessed="/path/to/nnUNet_preprocessed"   # should be on fast storage (SSD)
+export nnUNet_results="/path/to/nnUNet_results"
+```
+
+The conversion script outputs data to `nnUNet_raw`. After conversion, the user must set these variables before running `nnUNetv2_plan_and_preprocess`.
+
+---
+
+## Inference Data Format
+
+The data format for inference **must match training exactly**:
+- Same `file_ending` as specified in dataset.json
+- Same channel order and naming convention (`{CASE_ID}_{XXXX}.{FILE_ENDING}`)
+- All input channels must be present for every case
+- You cannot train on `.png` and run inference on `.jpg`
+
+---
+
+## Migrating Existing Datasets
+
+### From Medical Segmentation Decathlon (MSD)
+```bash
+nnUNetv2_convert_MSD_dataset -i /path/to/TaskXXX_Name -o DatasetXXX_Name
+```
+
+### From nnU-Net v1
+```bash
+nnUNetv2_convert_old_nnUNet_dataset /path/to/old/TaskXXX_Name DatasetXXX_Name
+```
+
+Key differences from v1:
+- "modality" is now `channel_names`
+- Labels are `name: int` (not `int: name`)
+- Datasets are `DatasetXXX_Name` (not `TaskXXX`)
+- `file_ending` field is new (supports multiple formats)
+
+---
+
+## Custom Data Splits
+
+By default nnUNet uses 5-fold cross-validation with random splits. To use custom splits:
+
+1. Create a `splits_final.json` in `nnUNet_preprocessed/DatasetXXX_NAME/`
+2. Format: list of 5 dicts, each with `"train"` and `"val"` keys containing lists of case identifiers
+
+```json
+[
+    {"train": ["case_001", "case_002", ...], "val": ["case_010", "case_011", ...]},
+    {"train": ["case_003", "case_004", ...], "val": ["case_001", "case_002", ...]},
+    ...
+]
 ```
 
 ---
