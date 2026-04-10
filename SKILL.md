@@ -176,6 +176,51 @@ ls labelsTr/ | head -5
 nnUNetv2_plan_and_preprocess -d {ID} --verify_dataset_integrity
 ```
 
+### Step 5 — Update Conversion Notes
+
+After every successful conversion, append an entry to `conversion_notes.md` in the `nnUNet_raw/` directory. This file serves as a human-readable log of all conversions — what was converted, how, and what decisions were made.
+
+If the file does not exist, create it with a `# nnUNet Dataset Conversion Notes` header.
+
+Each entry must include these sections:
+
+```markdown
+## Dataset{ID}_{Name}
+
+**Source:** `/path/to/source/data/`
+**Task:** brief description of the segmentation task
+**Cases:** number of cases
+**Dataset size:** total size on disk after conversion (e.g. 348 MB)
+**Raw data format:** original format before conversion (e.g. DICOM, NIfTI, PNG, TIFF)
+**Output format:** nnUNet file_ending (e.g. .nii.gz, .png, .tif)
+**Conversion date:** YYYY-MM-DD
+**Licence:** dataset licence if known (e.g. CC BY 4.0, TCIA Data Usage Policy)
+**Paper:** citation or DOI of the related publication
+**Webpage:** URL of the dataset page
+
+### Format decision
+- What format was the input? Was conversion needed? What tool/method was used?
+
+### Label handling
+- How were labels extracted/mapped? What are the integer values?
+- Any special handling (remapping, combining, missing labels)?
+
+### Dropped files
+- What files from the source were NOT included and why?
+
+### dataset.json
+```json
+channel_names: ...
+labels: ...
+file_ending: ...
+```
+
+### Notes
+- Any gotchas, warnings, or non-obvious decisions made during conversion.
+```
+
+This step is **mandatory** — do not skip it. The conversion notes are the only record of how each dataset was prepared and what was intentionally excluded.
+
 ---
 
 ## 2D Image Datasets (PNG/BMP/TIFF)
