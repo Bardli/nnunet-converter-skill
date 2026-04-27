@@ -68,11 +68,19 @@ nnunet-converter/
 │   ├── label_handling.md                     # validation, ignore label, region-based
 │   ├── input_layouts.md                      # Layouts A / B / C / D
 │   ├── conversion_notes_template.md          # mandatory Step 5 log template
+│   ├── splits_and_provenance.md              # splits_final.json + optional _manifest.json
 │   └── migration_and_inference.md            # env vars, MSD/v1, splits, inference
 ├── scripts/
-│   └── convert_template.py                   # Reusable conversion script template
+│   ├── convert_template.py                   # Reusable conversion script template (complex inputs)
+│   ├── make_nnunet_dataset_simple.py         # CLI for the simple 3D-NIfTI case (adapted from medimg_skills)
+│   └── write_manifest.py                     # Optional _manifest.json provenance writer (adapted from medimg_skills)
 └── README.md
 ```
+
+`make_nnunet_dataset_simple.py` and `write_manifest.py` are adapted from
+[ryanwangk/medimg_skills](https://github.com/ryanwangk/medimg_skills) under MIT.
+Dataset acquisition (TCGA/GDC, Kaggle, HuggingFace, Google Drive, sbatch templates) is
+intentionally out of scope for this skill — see the sibling `dataset-acquisition` skill.
 
 ## Requirements
 

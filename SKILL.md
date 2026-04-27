@@ -109,7 +109,18 @@ Before writing any code, determine:
 
 ### Step 2 — Write the Conversion Script
 
-Use `scripts/convert_template.py` as a starting point. Choose dependencies by input format:
+Use `scripts/convert_template.py` as a starting point for **complex / non-NIfTI inputs**.
+
+**Shortcut for the simple-NIfTI case:** if and only if all of these hold —
+- inputs are 3D `.nii.gz`,
+- per-case layout is exactly `raw-dir/images/<case>_<chan>.nii.gz` + `raw-dir/labels/<case>.nii.gz`,
+- labels are already contiguous integers starting at 0,
+- no classification labels, no ignore label, no region-based labels,
+- no spatial-resampling needed across modalities
+
+— you MAY use `scripts/make_nnunet_dataset_simple.py` directly instead of writing your own script. It copies files, writes `dataset.json`, and writes a seeded `splits_final.json` in one shot. Do **not** use it for any other layout.
+
+Choose dependencies by input format:
 - `.nii.gz` / `.mha` / `.nrrd` → `SimpleITK` or `nibabel`.
 - `.png` / `.jpg` / `.bmp` → `Pillow`.
 - `.tif` / `.tiff` (2D) → `Pillow`. `.tif` (3D stacks) → `tifffile`.
@@ -170,6 +181,17 @@ If `conversion_notes.md` does not exist, create it with a `# nnUNet Dataset Conv
 
 Skipping this step is treated as an incomplete conversion.
 
+### Step 6 — Generate splits_final.json + Optional Provenance
+
+If the user wants reproducible cross-validation (almost always — anything that will train a model needs frozen splits), you **MUST** read `references/splits_and_provenance.md` before generating `splits_final.json`. The reference covers:
+
+- Where `splits_final.json` lives (`$nnUNet_preprocessed`, **not** `$nnUNet_raw`).
+- Required JSON shape and case-ID rules.
+- Seeded patient-level split generation (the simple CLI writes this for you; otherwise use the inline pattern in the reference).
+- The optional machine-readable `_manifest.json` companion (run `scripts/write_manifest.py`). This is **optional** but recommended; the mandatory human-readable record is still `conversion_notes.md` (Step 5).
+
+Record the seed and `num_folds` in your Step 5 conversion-notes entry under **Notes**.
+
 ---
 
 ## Other scenarios
@@ -179,7 +201,7 @@ Skipping this step is treated as an incomplete conversion.
 | Migrating from MSD or nnU-Net v1 | `references/migration_and_inference.md` |
 | Setting up `nnUNet_raw` / `nnUNet_preprocessed` / `nnUNet_results` env vars | `references/migration_and_inference.md` |
 | Preparing inference inputs to match a trained model | `references/migration_and_inference.md` |
-| Writing a custom `splits_final.json` for cross-validation | `references/migration_and_inference.md` |
+| Writing a custom `splits_final.json` for cross-validation | `references/splits_and_provenance.md` (preferred) or `references/migration_and_inference.md` (older brief) |
 
 ---
 
@@ -197,6 +219,7 @@ When the situation matches the **left** column, the rule on the **right** is man
 | Non-trivial / unfamiliar source folder layout | **MUST** read `references/input_layouts.md` before pairing images with labels. |
 | Writing or editing `dataset.json` | **MUST** read `references/dataset_json_spec.md` before writing JSON. |
 | **Step 5 — Conversion notes (every conversion)** | **MUST** read `references/conversion_notes_template.md` and append the fully-populated entry. |
+| Generating `splits_final.json` or the optional `_manifest.json` | **MUST** read `references/splits_and_provenance.md` before generating either file. |
 | MSD / nnU-Net v1 migration, env vars, inference, custom splits | **MUST** read `references/migration_and_inference.md`. |
 
 ---
@@ -215,8 +238,16 @@ nnunet-converter/
 │   ├── label_handling.md                     # validation, ignore label, region-based
 │   ├── input_layouts.md                      # Layouts A / B / C / D
 │   ├── conversion_notes_template.md          # mandatory Step 5 log template
+│   ├── splits_and_provenance.md              # splits_final.json + optional _manifest.json
 │   └── migration_and_inference.md            # env vars, MSD/v1, splits, inference
 ├── scripts/
-│   └── convert_template.py                   # reusable Python conversion template
+│   ├── convert_template.py                   # reusable Python conversion template (complex inputs)
+│   ├── make_nnunet_dataset_simple.py         # CLI for the simple 3D-NIfTI case (writes splits_final.json)
+│   └── write_manifest.py                     # optional _manifest.json provenance writer
 └── README.md
 ```
+
+Both `make_nnunet_dataset_simple.py` and `write_manifest.py` were adapted from
+[ryanwangk/medimg_skills](https://github.com/ryanwangk/medimg_skills) (MIT). Acquisition
+of medical datasets (TCGA/GDC, Kaggle, HuggingFace, Google Drive, sbatch) is intentionally
+out of scope here — it lives in a separate `dataset-acquisition` skill.
