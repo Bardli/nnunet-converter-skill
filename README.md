@@ -54,13 +54,23 @@ The skill will ask clarifying questions about your dataset (modalities, label va
 
 ## Structure
 
+The skill uses **progressive disclosure**: `SKILL.md` is a compact entry point that contains the core principles and the workflow, and points to the relevant `references/*.md` files on demand. Topical references are loaded only when the input dataset's characteristics require them.
+
 ```
 nnunet-converter/
-├── SKILL.md                          # Skill definition and workflow
+├── SKILL.md                                  # Compact entry point: principle + workflow + pointer table
 ├── references/
-│   └── dataset_json_spec.md          # dataset.json field reference
+│   ├── dataset_json_spec.md                  # dataset.json field reference
+│   ├── 2d_images.md                          # PNG / BMP / RGB natural images
+│   ├── 3d_tiff.md                            # Tiff3DIO + companion .json spacing
+│   ├── multi_modal.md                        # multi-channel layout + spatial resampling
+│   ├── classification_labels.md              # cls_data.csv + classification_labels
+│   ├── label_handling.md                     # validation, ignore label, region-based
+│   ├── input_layouts.md                      # Layouts A / B / C / D
+│   ├── conversion_notes_template.md          # mandatory Step 5 log template
+│   └── migration_and_inference.md            # env vars, MSD/v1, splits, inference
 ├── scripts/
-│   └── convert_template.py           # Reusable conversion script template
+│   └── convert_template.py                   # Reusable conversion script template
 └── README.md
 ```
 
